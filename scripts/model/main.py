@@ -1,312 +1,175 @@
-from gurobipy import Model, GRB
+from gurobipy import Model, GRB, quicksum
 
-# Define sets
-I = range(5)  # Orders
-B = range(3)  # Batches
-V = range(2)  # Vehicles
-D = range(3)
-J = range(5)
+# Create the model
+model = Model("PharmaceuticalDelivery")
 
-# Define parameters
-R = {i: 100 for i in I}
-W = {i: 10 for i in I}
-CA = {b: 50 for b in B}
-DTij = {(i, j): 10 for i in I for j in I}
+# Sets
+I = [1, 2, 3]  # Three pharmaceutical orders
+B = [1, 2, 3, 4]     # Two delivery batches
+V = [1, 2]     # Two vehicles
+N = [0, 1, 2, 3]  # Nodes: depot (0) and three orders (1, 2, 3)
 
-# Create a model
-model = Model()
+# Parameters
+W = {1: 10, 2: 15, 3: 20}  # Weight of pharmaceutical orders in kg
+t_lb = {1: 2, 2: 2, 3: 2}  # Lower temperature bound (°C)
+t_ub = {1: 8, 2: 8, 3: 8}  # Upper temperature bound (°C)
+CA = 30  # Vehicle capacity in kg
+ST_LB = {1: 8, 2: 9, 3: 7}  # Lower service time (hours)
+ST_UB = {1: 17, 2: 17, 3: 17}  # Upper service time (hours)
+M = 1e6  # A large constant
 
-# Add variables
+# Decision variables
+a = model.addVars(I, vtype=GRB.BINARY, name="a")
 x = model.addVars(I, B, vtype=GRB.BINARY, name="x")
 y = model.addVars(B, V, vtype=GRB.BINARY, name="y")
-z = model.addVars(I, vtype=GRB.BINARY, name="z")
+z = model.addVars(I, I, vtype=GRB.BINARY, name="z")
+t_b = model.addVars(B, vtype=GRB.CONTINUOUS, lb=t_lb, ub=t_ub, name="t_b")
+r_b = model.addVars(N, N, B, vtype=GRB.BINARY, name="r_b")
+u = model.addVars(N, B, vtype=GRB.INTEGER, name="u")
+s = model.addVars(B, B, V, vtype=GRB.BINARY, name="s")
+s_b = model.addVars(B, vtype=GRB.CONTINUOUS, name="s_b")
+c_b = model.addVars(B, vtype=GRB.CONTINUOUS, name="c_b")
+u_bv = model.addVars(B, V, vtype=GRB.INTEGER, name="u_bv")
+E = model.addVars(I, vtype=GRB.CONTINUOUS, name="E")
+T = model.addVars(I, vtype=GRB.CONTINUOUS, name="T")
+print(u.keys())  # Check all valid (i, b) pairs for u
+# Define the constant alpha (for example, set alpha = 1 for simplicity)
+alpha = 1  # You can adjust this value based on the problem context
+
+# Objective function components
+DeliveryRevenue = quicksum(W[i] * a[i] for i in I)  # Delivery revenue
+EarlinessPenalty = quicksum(alpha * W[i] * (E[i] + T[i]) for i in I)  # Earliness and tardiness cost
+DisposalPenalty = quicksum(W[i] * z[i, j] for i in I for j in I)  # Disposal cost
+
+# Maximize total profit (DeliveryRevenue - EarlinessPenalty - DisposalPenalty)
+model.setObjective(DeliveryRevenue - (EarlinessPenalty + DisposalPenalty), GRB.MAXIMIZE)
 
 
-# Add continuous variables
-t = model.addVars(B, lb=0, ub=100, vtype=GRB.CONTINUOUS, name="t")  # Example: Temperature
-c = model.addVars(I, vtype=GRB.CONTINUOUS, name="c")                # Example: Completion time
-E = model.addVars(I, vtype=GRB.CONTINUOUS, name="E")                # Example: Earliness
-T = model.addVars(I, vtype=GRB.CONTINUOUS, name="T")                # Example: Tardiness
+# Constraints
+# Constraint (9)
+model.addConstrs((quicksum(x[i, b] for b in B) == a[i] for i in I), name="C9")
 
-# Define variables (add these to your model setup)
-a = model.addVars(I, vtype=GRB.BINARY, name="a")  # Binary: order assigned
-r = model.addVars(B, I, I, vtype=GRB.BINARY, name="r")  # Routing variables
-u = model.addVars(B, I, vtype=GRB.CONTINUOUS, name="u")  # Sequence variables
-st = model.addVars(B, lb=0, ub=100, vtype=GRB.CONTINUOUS, name="st")  # Start times
-sb = model.addVars(V, I, lb=0, vtype=GRB.CONTINUOUS, name="sb")  # Sub-tour variables
-ci = model.addVars(B, I, vtype=GRB.CONTINUOUS, name="ci")  # Completion time start
-cj = model.addVars(B, I, vtype=GRB.CONTINUOUS, name="cj")  # Completion time end
-cb = model.addVars(B, vtype=GRB.CONTINUOUS, name="cb")  # Batch completion time
-s = model.addVars(V, I, I, vtype=GRB.BINARY, name="s")
+# Constraint (10)
+model.addConstrs((quicksum(x[i, b] * W[i] for i in I) <= CA for b in B), name="C10")
 
-# Define ST_lb (lower bound for start times)
-ST_lb = {b: 0 for b in B}  # Example: all batches start at time 0 initially
+# Constraint (11)
+model.addConstrs((ST_LB[i] - M * (1 - x[i, b]) <= t_b[b] for b in B for i in I), name="C11a")
+model.addConstrs((t_b[b] <= ST_UB[i] + M * (1 - x[i, b]) for b in B for i in I), name="C11b")
 
-# Modify Constraint (9) to align with 'a' variable
-for i in I:
-    model.addConstr(sum(x[i, b] for b in B) == a[i], name=f"Constraint_9")
+# Constraint (12)
+model.addConstrs((quicksum(y[b, v] for v in V) == quicksum(x[i, b] for i in I) for b in B), name="C12")
 
-# Example parameters
-R = {i: 100 for i in I}  # Revenue for orders
-M = 1000  # Disposal cost penalty
+# Constraint (13)
+model.addConstrs((x[i, b] == quicksum(y[b, v] for v in V) for b in B for i in I), name="C13")
 
-# Define ETC and DFC (sub-components of the objective)
-ETC = sum(R[i] * (E[i] + T[i]) for i in I)
-DFC = sum(M * z[i] for i in I)
+# Constraint (14)
+model.addConstrs((r_b[0, j, b] + quicksum(r_b[i, j, b] for i in I if i != j) == x[j, b] for b in B for j in I), name="C14")
 
-# Objective function
-model.setObjective(sum(R[i] * x[i, b] for i in I for b in B) - ETC - DFC, GRB.MAXIMIZE)
+# Constraint (15)
+model.addConstrs((r_b[i, 0, b] + quicksum(r_b[i, j, b] for j in I if i != j) == x[i, b] for b in B for i in I), name="C15")
 
-# Constraint (9): Ensure each order is assigned to at most one batch
-for i in I:
-    model.addConstr(sum(x[i, b] for b in B) == a[i], name=f"Constraint_9")
+# Constraint (16)
+model.addConstrs((quicksum(x[i, b] for i in I) <= M * quicksum(r_b[0, j, b] for j in I) for b in B), name="C16")
 
-# Constraint (10): Batch capacity constraint
-for b in B:
-    model.addConstr(sum(W[i] * x[i, b] for i in I) <= CA[b], name=f"Constraint_10")
+# Constraint (17)
+model.addConstrs((quicksum(x[i, b] for i in I) <= M * quicksum(r_b[i, 0, b] for i in I) for b in B), name="C17")
 
-# Constraint (11): Starting time constraint for orders in batches
-for b in B:
-    for i in I:
-        model.addConstr(
-            st[b] >= M * x[i, b] - ST_lb[b] + M * (1 - a[i]), name=f"Constraint_11"
-        )
+# Constraint (18)
+model.addConstrs((r_b[i, i, b] == 0 for b in B for i in N), name="C18")
 
-# Constraint (12): Ensure each batch is assigned to exactly one vehicle
-for b in B:
-    model.addConstr(sum(y[b, v] for v in V) == 1, name=f"Constraint_12")
+# Constraint (19)
+model.addConstrs((u[0, b] == 0 for b in B), name="C19")
 
-# Constraint (13): Ensure z[i] is set to 0 if an order is delivered
-for i in I:
-    model.addConstr(z[i] <= sum(x[i, b] for b in B), name=f"Constraint_13")
+# Constraint (20)
+model.addConstrs((u[i, b] + 1 <= u[j, b] + M * (1 - r_b[i, j, b]) for b in B for i in N for j in I if i != j), name="C20")
 
-# Constraint (14): Routing constraints (precedence for nodes)
-for b in B:
-    for i in I:
-        for j in I:
-            if i != j:
-                model.addConstr(r[b, i, j] + r[b, j, i] <= 1, name=f"Constraint_14")
+# Constraint (21)
+model.addConstrs((u[i, b] <= M * quicksum(r_b[i, j, b] for j in I if j != i) for b in B for i in I), name="C21")
 
-# Constraint (15): Ensure node precedence for orders in a batch
-for b in B:
-    for i in I:
-        model.addConstr(
-            sum(r[b, i, j] for j in I if i != j)
-            == sum(r[b, j, i] for j in I if i != j),
-            name=f"Constraint_15",
-        )
+# Constraint (22)
+model.addConstrs((u[i, b] <= x[i, b] for b in B for i in I), name="C22")
 
-# Constraint (16): Ensure a node appears in the routing only once
-for b in B:
-    model.addConstr(
-        sum(r[b, i, j] for i in I for j in I if i != j) <= len(I),
-        name=f"Constraint_16",
-    )
+# Constraint (23)
+model.addConstrs((s[i, j, v] == y[i, v] for v in V for i in B for j in B if i != j), name="C23")
 
-# Constraint (17): Ensure routing precedence does not conflict with batch assignment
-for b in B:
-    for i in I:
-        model.addConstr(
-            sum(r[b, i, j] for j in I if i != j) <= M * x[i, b], name=f"Constraint_17"
-        )
+# # Constraint (24)
+# model.addConstrs((s[0, j, v] == quicksum(s[i, j, v] for i in B if i != j) for v in V for j in B), name="C24")
+#
+# # Constraint (25)
+# model.addConstrs((s[i, 0, v] == quicksum(s[i, j, v] for j in B if i != j) for v in V for i in B), name="C25")
+#
+# # Constraint (26)
+# model.addConstrs((quicksum(s[i, j, v] for j in B) <= M * quicksum(s[0, j, v] for j in B) for v in V for i in B), name="C26")
+#
+# # Constraint (27)
+# model.addConstrs((s[i, j, v] == 0 for v in V for i in B for j in B if i == j), name="C27")
+#
+# # Constraint (28)
+# model.addConstrs((u_bv[b, v] == 0 for b in B for v in V), name="C28")
+#
+# # Constraint (29)
+# model.addConstrs((u_bv[b, v] <= quicksum(y[b, v] for v in V) for b in B for v in V), name="C29")
+#
+# # Constraint (30)
+# model.addConstrs((c_b[b] <= quicksum(s_b[b] for b in B) for v in V for b in B), name="C30")
+#
+# # Constraint (31)
+# model.addConstrs((s_b[b] <= quicksum(y[b, v] for v in V) for b in B for v in V), name="C31")
+#
+# # Constraint (32)
+# model.addConstrs((c_b[b] + M * (1 - s[i, j, v]) >= s_b[b] for v in V for i in B for j in B if i != j), name="C32")
+#
+# # Constraint (33)
+# model.addConstrs((s_b[b] + M * (1 - s[i, j, v]) >= c_b[b] for v in V for i in B for j in B if i != j), name="C33")
+#
+# # Constraint (34)
+model.addConstrs((s_b[b] <= M * quicksum(y[b, v] for v in V) for b in B), name="C34")
+#
+# # Constraint (35)
+model.addConstrs((c_b[b] <= M * quicksum(y[b, v] for v in V) for b in B), name="C35")
+#
+# # Constraint (36)
+# model.addConstrs((c_b[b] + DT[i] <= s_b[b] + M * (1 - r_b[i, j, b]) for b in B for i in I for j in I if i != j), name="C36")
+#
+# # Constraint (37)
+# model.addConstrs((s_b[b] + DT[j] <= c_b[b] + M * (1 - r_b[i, j, b]) for b in B for i in I for j in I if i != j), name="C37")
+#
+# # Constraint (38)
+# model.addConstrs((c_b[b] + DT[i] <= s_b[b] + M * (1 - r_b[i, j, b]) for b in B for i in I), name="C38")
+#
+# # Constraint (39)
+# model.addConstrs((s_b[b] + DT[i] <= c_b[b] + M * (1 - r_b[i, j, b]) for b in B for i in I), name="C39")
+#
+# # Constraint (40)
+# model.addConstrs((c_b[b] + DT[i] <= s_b[b] + M * (1 - r_b[i, j, b]) for b in B for i in I), name="C40")
+#
+# # Constraint (41)
+# model.addConstrs((s_b[b] + DT[i] <= c_b[b] + M * (1 - r_b[i, j, b]) for b in B for i in I), name="C41")
+#
+# # Constraint (42)
+# model.addConstrs((a[i] + x[i, b] + y[b, v] + z[i, j] <= 1 for i in I for b in B for v in V), name="C42")
+#
+# # Constraint (43)
+model.addConstrs((r_b[i, j, b] >= 0 for i in N for j in N for b in B), name="C43")
+#
+# # Constraint (44)
+model.addConstrs((a[i] >= 0 for i in I), name="C44")
+#
+# # Constraint (45)
+model.addConstrs((x[i, b] >= 0 for i in I for b in B), name="C45")
+#
+# # Constraint (46)
+model.addConstrs((y[b, v] >= 0 for b in B for v in V), name="C46")
+#
+# # Constraint (47)
+model.addConstrs((u_bv[b, v] >= 0 for b in B for v in V), name="C47")
 
-# Constraint (18): Precedence constraints for routes
-for b in B:
-    model.addConstr(r[b, 0, 0] == 0, name=f"Constraint_18")
+# Optimize the model
+model.optimize()
 
-# Constraint (19): Sequence variable initialization
-for b in B:
-    for i in I:
-        model.addConstr(u[b, i] == 0, name=f"Constraint_19")
-
-# Constraint (20): Enforce sequence precedence for routing
-for b in B:
-    for i in I:
-        for j in I:
-            if i != j:
-                model.addConstr(
-                    u[b, j] >= u[b, i] + 1 - M * (1 - r[b, i, j]),
-                    name=f"Constraint_20",
-                )
-
-# Constraint (21): Sequence bounds for routing variables
-for b in B:
-    for i in I:
-        model.addConstr(u[b, i] <= M * sum(r[b, i, j] for j in I if i != j), name=f"Constraint_21")
-
-# Constraint (22): Vehicle sequence initialization
-for b in B:
-    model.addConstr(sum(y[b, v] for v in V) <= len(V), name=f"Constraint_22")
-
-# Constraint (23): Vehicle routing constraints
-for b in B:
-    for v in V:
-        for i in I:
-            for j in I:
-                if i != j:
-                    model.addConstr(
-                        s[v, i, j] <= r[b, i, j] + M * (1 - y[b, v]),
-                        name=f"Constraint_23",
-                    )
-
-# Constraint (24): Precedence constraints between batches
-for b in B:
-    model.addConstr(sum(s[v, i, j] for v in V) <= len(V), name=f"Constraint_24")
-
-# Constraint (25): Precedence within vehicles for routes
-for b in B:
-    for v in V:
-        for i in I:
-            model.addConstr(sum(s[v, i, j] for j in I if i != j) <= len(V), name=f"Constraint_25")
-
-# Constraint (26): Precedence conflict avoidance between vehicles
-for b in B:
-    for v in V:
-        for i in I:
-            for j in I:
-                if i != j:
-                    model.addConstr(
-                        s[v, i, j] <= 1 - y[b, v], name=f"Constraint_26"
-                    )
-
-# Constraint (27): Ensure vehicle precedence initialization
-for v in V:
-    model.addConstr(u[v, 0] == 0, name=f"Constraint_27")
-
-# Constraint (28): Scheduling sequence variable bounds
-for b in B:
-    for v in V:
-        for i in I:
-            for j in I:
-                if i != j:
-                    model.addConstr(
-                        u[v, j] >= u[v, i] + 1 - M * (1 - s[v, i, j]),
-                        name=f"Constraint_28",
-                    )
-
-# Constraint (29): Ensure routing sequence within batches for vehicles
-for b in B:
-    for i in I:
-        for j in I:
-            if i != j:
-                model.addConstr(
-                    u[v, j] <= M * sum(r[b, i, j] for v in V), name=f"Constraint_29"
-                )
-
-# Constraint (30): Vehicle sequence bounds for scheduling
-for b in B:
-    model.addConstr(
-        u[v, b] <= M * sum(s[v, i, j] for i in I for j in I if i != j),
-        name=f"Constraint_30",
-    )
-
-# Constraint (31): Vehicle assignment constraint for routing
-for v in V:
-    for i in list(I) + list(B) + list(D) + list(E):
-        model.addConstr(u[v, i] <= sum(y[b, v] for b in B), name=f"Constraint_31")
-
-# Constraint (32): Sub-tour elimination (part 1)
-for v in V:
-    for i in I:
-        for j in B:
-            if i != j:
-                model.addConstr(sb[v, i] <= sb[v, j] + M * (1 - s[v, i, j]), name=f"Constraint_32")
-
-# Constraint (33): Sub-tour elimination (part 2)
-for v in V:
-    for i in I:
-        for j in B:
-            if i != j:
-                model.addConstr(sb[v, j] <= sb[v, i] + M * (1 - s[v, i, j]), name=f"Constraint_33")
-
-# Constraint (34): Starting time constraints within batches
-for v in V:
-    for i in I:
-        model.addConstr(sb[v, i] <= sb[v, i] + M * (1 - s[v, i, j]), name=f"Constraint_34")
-
-# Constraint (35): Boundaries for the sub-tour variables
-for v in V:
-    for i in I:
-        model.addConstr(0 <= sb[v, i] + M * (1 - s[v, i, j]), name=f"Constraint_35")
-
-# Constraint (36): Arrival time constraints (part 1)
-for b in B:
-    for i in I:
-        for j in I:
-            if i != j:
-                model.addConstr(
-                    ci[b, i] + DTij[i, j] <= cj[b, j] + M * (1 - r[b, i, j]),
-                    name=f"Constraint_36",
-                )
-
-# Constraint (37): Arrival time constraints (part 2)
-for b in B:
-    for i in I:
-        for j in I:
-            if i != j:
-                model.addConstr(
-                    cj[b, j] >= ci[b, i] + DTij[i, j] - M * (1 - r[b, i, j]),
-                    name=f"Constraint_37",
-                )
-
-# Constraint (38): Completion time constraints (part 1)
-for b in B:
-    for i in I:
-        model.addConstr(
-            ci[b, i] + DTij[i, i] <= ci[b, i] + M * (1 - r[b, i, i]), name=f"Constraint_38"
-        )
-
-# Constraint (39): Completion time constraints (part 2)
-for b in B:
-    for i in I:
-        model.addConstr(
-            cj[b, i] <= ci[b, i] + DTij[i, i] - M * (1 - r[b, i, i]), name=f"Constraint_39"
-        )
-
-# Constraint (40): Completion time of last node in a batch
-for b in B:
-    for i in I:
-        model.addConstr(
-            cj[b, i] <= ci[b, i] + DTij[i, i] + c[b] + M * (1 - r[b, i, i]),
-            name=f"Constraint_40",
-        )
-
-# Constraint (41): Boundaries for the completion time
-for b in B:
-    for i in I:
-        model.addConstr(cj[b, i] <= ci[b, i] + DTij[i, i] + cb[b], name=f"Constraint_41")
-
-# Constraint (42): Binary constraints for decision variables
-for i in I:
-    for b in B:
-        for v in V:
-            model.addConstr(a[i] >= 0, name=f"Constraint_42")
-            model.addConstr(x[i, b] >= 0, name=f"Constraint_42")
-            model.addConstr(y[b, v] >= 0, name=f"Constraint_42")
-
-# Constraint (43): Routing binary variable constraints
-for i in list(I) + list(J):
-    for j in list(I) + list(J):
-        model.addConstr(r[i, j, b] in [0, 1], name=f"Constraint_43")
-
-# Constraint (44): Routing variable bounds for vehicles
-for b in B:
-    for v in V:
-        model.addConstr(r[v, b] in [0, 1], name=f"Constraint_44")
-
-# Constraint (45): Boundaries for the sub-tour variables
-for b in B:
-    for v in V:
-        for i in I + D:
-            model.addConstr(sb[v, i] >= 0, name=f"Constraint_45")
-
-# Constraint (46): Routing variable constraints between batches
-for b in B:
-    for i in I:
-        for j in J:
-            model.addConstr(s[v, i, j] in [0, 1], name=f"Constraint_46")
-
-# Constraint (47): Non-negativity constraints for vehicle sub-tour variables
-for b in B:
-    for v in V:
-        model.addConstr(u[v, b] >= 0, name=f"Constraint_47")
+# Print the solution
+if model.status == GRB.OPTIMAL:
+    print("Optimal objective value:", model.objVal)
+    for var in model.getVars():
+        if var.x > 0:
+            print(f"{var.varName}: {var.x}")
