@@ -5,11 +5,13 @@ model = Model("PharmaceuticalDelivery")
 
 # Sets
 I = [1, 2, 3]  # Three pharmaceutical orders
-B = [1, 2, 3, 4]     # Two delivery batches
+B = [1, 2, 3, 4]   # Two delivery batches
 V = [1, 2]     # Two vehicles
 N = [0, 1, 2, 3]  # Nodes: depot (0) and three orders (1, 2, 3)
+ # Revenue of pharmaceutical orders
 
 # Parameters
+R = {1: 100, 2: 150, 3: 200}  # Revenue of pharmaceutical orders
 W = {1: 10, 2: 15, 3: 20}  # Weight of pharmaceutical orders in kg
 t_lb = {1: 2, 2: 2, 3: 2}  # Lower temperature bound (°C)
 t_ub = {1: 8, 2: 8, 3: 8}  # Upper temperature bound (°C)
@@ -22,7 +24,7 @@ M = 1e6  # A large constant
 a = model.addVars(I, vtype=GRB.BINARY, name="a")
 x = model.addVars(I, B, vtype=GRB.BINARY, name="x")
 y = model.addVars(B, V, vtype=GRB.BINARY, name="y")
-z = model.addVars(I, I, vtype=GRB.BINARY, name="z")
+z = model.addVars(I, vtype=GRB.BINARY, name="z")
 t_b = model.addVars(B, vtype=GRB.CONTINUOUS, lb=t_lb, ub=t_ub, name="t_b")
 r_b = model.addVars(N, N, B, vtype=GRB.BINARY, name="r_b")
 u = model.addVars(N, B, vtype=GRB.INTEGER, name="u")
@@ -32,20 +34,21 @@ c_b = model.addVars(B, vtype=GRB.CONTINUOUS, name="c_b")
 u_bv = model.addVars(B, V, vtype=GRB.INTEGER, name="u_bv")
 E = model.addVars(I, vtype=GRB.CONTINUOUS, name="E")
 T = model.addVars(I, vtype=GRB.CONTINUOUS, name="T")
-print(u.keys())  # Check all valid (i, b) pairs for u
+
 # Define the constant alpha (for example, set alpha = 1 for simplicity)
 alpha = 1  # You can adjust this value based on the problem context
 
 # Objective function components
-DeliveryRevenue = quicksum(W[i] * a[i] for i in I)  # Delivery revenue
-EarlinessPenalty = quicksum(alpha * W[i] * (E[i] + T[i]) for i in I)  # Earliness and tardiness cost
-DisposalPenalty = quicksum(W[i] * z[i, j] for i in I for j in I)  # Disposal cost
+DeliveryRevenue = quicksum(R[i] * a[i] for i in I)  # Delivery revenue
+EarlinessPenalty = quicksum(alpha * R[i] * (E[i] + T[i]) for i in I)  # Earliness and tardiness cost
+DisposalPenalty = quicksum(R[i] * z[i] for i in I)  # Disposal cost
 
 # Maximize total profit (DeliveryRevenue - EarlinessPenalty - DisposalPenalty)
 model.setObjective(DeliveryRevenue - (EarlinessPenalty + DisposalPenalty), GRB.MAXIMIZE)
 
 
 # Constraints
+
 # Constraint (9)
 model.addConstrs((quicksum(x[i, b] for b in B) == a[i] for i in I), name="C9")
 
@@ -57,13 +60,14 @@ model.addConstrs((ST_LB[i] - M * (1 - x[i, b]) <= t_b[b] for b in B for i in I),
 model.addConstrs((t_b[b] <= ST_UB[i] + M * (1 - x[i, b]) for b in B for i in I), name="C11b")
 
 # Constraint (12)
-model.addConstrs((quicksum(y[b, v] for v in V) == quicksum(x[i, b] for i in I) for b in B), name="C12")
+model.addConstrs((quicksum(y[b, v] for v in V) <= quicksum(x[i, b] for i in I) for b in B), name="C12")
 
 # Constraint (13)
-model.addConstrs((x[i, b] == quicksum(y[b, v] for v in V) for b in B for i in I), name="C13")
+model.addConstrs((x[i, b] <= quicksum(y[b, v] for v in V) for b in B for i in I), name="C13a")
+model.addConstrs((1 >= quicksum(y[b,v] for v in V) for b in B), name="C13b")
 
 # Constraint (14)
-model.addConstrs((r_b[0, j, b] + quicksum(r_b[i, j, b] for i in I if i != j) == x[j, b] for b in B for j in I), name="C14")
+model.addConstrs((r_b[0, i, b] + quicksum(r_b[i, j, b] for j in I if i != j) == x[i, b] for b in B for i in I), name="C14")
 
 # Constraint (15)
 model.addConstrs((r_b[i, 0, b] + quicksum(r_b[i, j, b] for j in I if i != j) == x[i, b] for b in B for i in I), name="C15")
@@ -72,7 +76,7 @@ model.addConstrs((r_b[i, 0, b] + quicksum(r_b[i, j, b] for j in I if i != j) == 
 model.addConstrs((quicksum(x[i, b] for i in I) <= M * quicksum(r_b[0, j, b] for j in I) for b in B), name="C16")
 
 # Constraint (17)
-model.addConstrs((quicksum(x[i, b] for i in I) <= M * quicksum(r_b[i, 0, b] for i in I) for b in B), name="C17")
+model.addConstrs((quicksum(x[i, b] for i in I) <= M * quicksum(r_b[j, 0, b] for j in I) for b in B), name="C17")
 
 # Constraint (18)
 model.addConstrs((r_b[i, i, b] == 0 for b in B for i in N), name="C18")
@@ -81,7 +85,7 @@ model.addConstrs((r_b[i, i, b] == 0 for b in B for i in N), name="C18")
 model.addConstrs((u[0, b] == 0 for b in B), name="C19")
 
 # Constraint (20)
-model.addConstrs((u[i, b] + 1 <= u[j, b] + M * (1 - r_b[i, j, b]) for b in B for i in N for j in I if i != j), name="C20")
+model.addConstrs((u[i, b] + r_b[i, j, b] <= u[j, b] + M * (1 - r_b[i, j, b]) for b in B for i in N for j in I if i != j), name="C20")
 
 # Constraint (21)
 model.addConstrs((u[i, b] <= M * quicksum(r_b[i, j, b] for j in I if j != i) for b in B for i in I), name="C21")
