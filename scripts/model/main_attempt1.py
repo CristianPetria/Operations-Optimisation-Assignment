@@ -1,33 +1,76 @@
 from gurobipy import Model, GRB, quicksum
+import random
 
-# ---------------------------
-# Sets and data (example)
-# ---------------------------
-I = [1, 2, 3]      # Pharmaceutical orders
-B = [1, 2, 3, 4]   # Delivery batches
-B0 = [0, 1, 2, 3, 4]
-V = [1, 2]         # Vehicles
-N = [0, 1, 2, 3]   # Nodes: 0 = depot, others = orders
+# # ---------------------------
+# # Sets and data (example)
+# # ---------------------------
+# I = [1, 2, 3]      # Pharmaceutical orders
+# B = [1, 2, 3, 4]   # Delivery batches
+# B0 = [0, 1, 2, 3, 4]
+# V = [1, 2]         # Vehicles
+# N = [0, 1, 2, 3]   # Nodes: 0 = depot, others = orders
+#
+# # Parameters
+# R = {1: 100, 2: 150, 3: 200}  # Revenue
+# W = {1: 10, 2: 15, 3: 20}     # Weight
+# t_lb = {1: 2, 2: 2, 3: 2}     # Lower temp bounds
+# t_ub = {1: 8, 2: 8, 3: 8}     # Upper temp bounds
+# CA = 30                       # Capacity
+# ST_LB = {1: 8, 2: 9, 3: 7}    # For feasibility checks
+# ST_UB = {1: 17, 2: 17, 3: 17}
+# D = {1: 10, 2: 12, 3: 9}      # Due dates (example)
+# S = {1: 16, 2: 17, 3: 15}     # Shelf lives (example)
+# alpha = 1
+# M = 1000000                     # Cost weight
+#
+# # DT[i,j]: Travel time between nodes (0 = depot, i in I)
+# # Must be defined by the user. Example:
+# DT = {(0,0):0, (0,1):1, (0,2):2, (0,3):1,
+#       (1,0):1, (1,1):0, (1,2):1, (1,3):2,
+#       (2,0):2, (2,1):1, (2,2):0, (2,3):1,
+#       (3,0):1, (3,1):2, (3,2):1, (3,3):0}
+
+def generate_random_travel_times(num_nodes, max_time=20):
+    DT = {}
+    for i in range(num_nodes):
+        for j in range(num_nodes):
+            DT[(i, j)] = 0 if i == j else random.randint(1, max_time)
+    return DT
+
+
+# Sets and data (extended for 20 orders)
+# -------------------------------------
+I = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]  # Pharmaceutical orders
+B = [1, 2, 3, 4, 5]                      # Delivery batches
+B0 = [0, 1, 2, 3, 4, 5]                  # Batches including depot batch 0
+V = [1, 2, 3, 4, 5, 6, 7, 8]                      # Vehicles
+N = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20] # Nodes: 0 = depot, others = orders
 
 # Parameters
-R = {1: 100, 2: 150, 3: 200}  # Revenue
-W = {1: 10, 2: 15, 3: 20}     # Weight
-t_lb = {1: 2, 2: 2, 3: 2}     # Lower temp bounds
-t_ub = {1: 8, 2: 8, 3: 8}     # Upper temp bounds
-CA = 30                       # Capacity
-ST_LB = {1: 8, 2: 9, 3: 7}    # For feasibility checks
-ST_UB = {1: 17, 2: 17, 3: 17} 
-D = {1: 10, 2: 12, 3: 9}      # Due dates (example)
-S = {1: 16, 2: 17, 3: 15}     # Shelf lives (example)
-alpha = 1   
-M = 1000000                     # Cost weight
+R = {1: 1000, 2: 1500, 3: 2000, 4: 1200, 5: 1800, 6: 1400, 7: 1600, 8: 1100, 9: 1900, 10: 1300,
+     11: 1700, 12: 1250, 13: 1800, 14: 1400, 15: 1550, 16: 1350, 17: 1450, 18: 1650, 19: 1500, 20: 1750}  # Revenue
+W = {1: 10, 2: 15, 3: 20, 4: 25, 5: 18, 6: 14, 7: 8, 8: 22, 9: 5, 10: 12,
+     11: 9, 12: 13, 13: 11, 14: 16, 15: 14, 16: 7, 17: 6, 18: 10, 19: 19, 20: 17}                         # Weight
+t_lb = {1: 2, 2: 4, 3: 3, 4: 5, 5: 6, 6: 1, 7: 3, 8: 2, 9: 1, 10: 4,
+        11: 3, 12: 2, 13: 5, 14: 1, 15: 4, 16: 2, 17: 3, 18: 4, 19: 1, 20: 3}                             # Lower temp bounds
+t_ub = {1: 8, 2: 9, 3: 7, 4: 10, 5: 11, 6: 8, 7: 6, 8: 12, 9: 9, 10: 10,
+        11: 13, 12: 11, 13: 14, 14: 12, 15: 9, 16: 10, 17: 12, 18: 13, 19: 8, 20: 11}                     # Upper temp bounds
+CA = 25                                                                                                   # Capacity
+ST_LB = {1: 8, 2: 9, 3: 7, 4: 10, 5: 8, 6: 9, 7: 6, 8: 8, 9: 7, 10: 9,
+         11: 6, 12: 8, 13: 9, 14: 7, 15: 8, 16: 6, 17: 7, 18: 8, 19: 9, 20: 10}                           # Feasibility checks
+ST_UB = {1: 17, 2: 16, 3: 17, 4: 18, 5: 16, 6: 17, 7: 15, 8: 18, 9: 17, 10: 16,
+         11: 19, 12: 18, 13: 20, 14: 17, 15: 16, 16: 15, 17: 18, 18: 17, 19: 16, 20: 19}
+D = {1: 10, 2: 12, 3: 9, 4: 11, 5: 15, 6: 13, 7: 10, 8: 14, 9: 8, 10: 12,
+     11: 11, 12: 13, 13: 9, 14: 10, 15: 14, 16: 8, 17: 9, 18: 11, 19: 13, 20: 10}                         # Due dates
+S = {1: 16, 2: 17, 3: 15, 4: 16, 5: 18, 6: 17, 7: 14, 8: 19, 9: 15, 10: 16,
+     11: 18, 12: 17, 13: 19, 14: 20, 15: 16, 16: 17, 17: 18, 18: 15, 19: 19, 20: 18}                      # Shelf lives
+alpha = 1                                                                                                 # Coefficient
+M = 1e7                                                                                                   # Cost weight
 
-# DT[i,j]: Travel time between nodes (0 = depot, i in I)
-# Must be defined by the user. Example:
-DT = {(0,0):0, (0,1):1, (0,2):2, (0,3):1,
-      (1,0):1, (1,1):0, (1,2):1, (1,3):2,
-      (2,0):2, (2,1):1, (2,2):0, (2,3):1,
-      (3,0):1, (3,1):2, (3,2):1, (3,3):0}
+# DT[i, j]: Travel time between nodes (0 = depot, i in I)
+DT = generate_random_travel_times(len(N), max_time=20)
+
+
 
 # ---------------------------
 # Model
@@ -88,7 +131,7 @@ model.addConstrs((r_b[i,i,b] == 0 for b in B for i in N), name="NoSelfLoop")
 
 # Subtour elimination in routing
 model.addConstrs((u_i[0,b] == 0 for b in B), name="DepotOrderPosition")
-model.addConstrs((u_i[i,b] + r_b[i,j,b] <= u_i[j,b] + M*(1 - r_b[i,j,b]) 
+model.addConstrs((u_i[i,b] + r_b[i,j,b] <= u_i[j,b] + M*(1 - r_b[i,j,b])
                   for b in B for i in N for j in I if i != j), name="RoutingSubtour1")
 model.addConstrs((u_i[i,b] <= M * quicksum(r_b[i,j,b] for j in I if j !=i) for b in B for i in I), name="RoutingSubtour2")
 model.addConstrs((u_i[i,b] <= quicksum(x[k,b] for k in I) for b in B for i in I), name="RoutingSubtour3")
