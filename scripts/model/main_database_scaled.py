@@ -40,14 +40,14 @@ parameter_values = []
 
 # Sets and data (scaled for bigger numbers)
 # ----------------------------------------
-for value in np.arange(25, 50, 1):
+for value in np.arange(10, 30, 1):
 
     # Append the value for each parameter
     parameter_values.append(value)
 
     # generate_list is used for I, B, B0, V, N
     I = generate_list(1, 20)  # Pharmaceutical orders
-    B = generate_list(1, 20)  # Delivery batches
+    B = generate_list(1, value)  # Delivery batches
     B0 = [0] + B # Batches including depot batch 0
     V = generate_list(1, 10)  # Vehicles
     N = [0] + I # Nodes: 0 = depot, others = orders
@@ -55,22 +55,22 @@ for value in np.arange(25, 50, 1):
     # generate_random_dict is used for DT, R, W, t_lb, t_ub, ST_LB, ST_UB, D, S
     # Parameters
     R = generate_random_dict(len(I), (1000, 2000))  # Revenue
-    W = generate_random_dict(len(I), (5, 60))  # Weight
-    t_lb = generate_random_dict(len(I), (-5, 10))  # Lower temp bounds
-    t_ub = generate_random_dict(len(I), (-3, 12))  # Upper temp bounds
+    W = generate_random_dict(len(I), (15, 50))  # Weight
+    t_lb = generate_random_dict(len(I), (-5, 0))  # Lower temp bounds
+    t_ub = generate_random_dict(len(I), (0, 12))  # Upper temp bounds
     ST_LB = generate_random_dict(len(I), (6, 10))  # Feasibility checks
-    ST_UB = generate_random_dict(len(I), (13, 20))  # Feasibility checks
-    D = generate_random_dict(len(I), (8, 15))  # Due dates
-    S = generate_random_dict(len(I), (14, 20))  # Shelf lives
+    ST_UB = generate_random_dict(len(I), (13, 25))  # Feasibility checks
+    D = generate_random_dict(len(I), (20, 30))  # Due dates
+    S = generate_random_dict(len(I), (10, 20))  # Shelf lives
 
     # generate_random_travel_times is used for DT
     # Generate random travel times
-    DT = generate_random_travel_times(len(N), max_time = 25)
+    DT = generate_random_travel_times(len(N), max_time = 40)
 
     # Fixed values parameters
     alpha = 1  # Coefficient
     M = 1e9  # Cost weight # If you decrease this value, the runtime will increase significantly for each 10x decrease
-    CA = value  # Capacity
+    CA = 50  # Capacity # It has to be at least the maximum value for weight
 
     # ---------------------------
     # Model
@@ -270,4 +270,4 @@ for value in np.arange(25, 50, 1):
     print(f"Total rejected orders: {rejected}")
     print(f"Ratio of accepted orders: {accepted / len(I) * 100:.2f}%")
 
-plot_parameter_variation(parameter_values = parameter_values, objective_values = objective_values, xlabel = "Capacity", title = "Objective vs Capacity")
+plot_parameter_variation(parameter_values = parameter_values, objective_values = objective_values, xlabel = "No. Batches", title = "Objective vs No. Batches")
