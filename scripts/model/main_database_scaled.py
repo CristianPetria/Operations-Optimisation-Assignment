@@ -40,14 +40,14 @@ parameter_values = []
 
 # Sets and data (scaled for bigger numbers)
 # ----------------------------------------
-for value in np.arange(10, 30, 1):
+for value in np.arange(1, 2, 1):
 
     # Append the value for each parameter
     parameter_values.append(value)
 
     # generate_list is used for I, B, B0, V, N
-    I = generate_list(1, 20)  # Pharmaceutical orders
-    B = generate_list(1, value)  # Delivery batches
+    I = generate_list(1, 50)  # Pharmaceutical orders
+    B = generate_list(1, 20)  # Delivery batches
     B0 = [0] + B # Batches including depot batch 0
     V = generate_list(1, 10)  # Vehicles
     N = [0] + I # Nodes: 0 = depot, others = orders
@@ -68,7 +68,7 @@ for value in np.arange(10, 30, 1):
     DT = generate_random_travel_times(len(N), max_time = 40)
 
     # Fixed values parameters
-    alpha = 1  # Coefficient
+    alpha = value  # Coefficient
     M = 1e9  # Cost weight # If you decrease this value, the runtime will increase significantly for each 10x decrease
     CA = 50  # Capacity # It has to be at least the maximum value for weight
 
@@ -269,5 +269,3 @@ for value in np.arange(10, 30, 1):
     print(f"Total accepted orders: {accepted}")
     print(f"Total rejected orders: {rejected}")
     print(f"Ratio of accepted orders: {accepted / len(I) * 100:.2f}%")
-
-plot_parameter_variation(parameter_values = parameter_values, objective_values = objective_values, xlabel = "No. Batches", title = "Objective vs No. Batches")
