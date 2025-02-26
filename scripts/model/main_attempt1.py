@@ -33,9 +33,15 @@ import random
 def generate_random_travel_times(num_nodes, max_time=20):
     DT = {}
     for i in range(num_nodes):
-        for j in range(num_nodes):
-            DT[(i, j)] = 0 if i == j else random.randint(1, max_time)
+        for j in range(i, num_nodes):  # Only go one way to avoid overwriting
+            if i == j:
+                DT[(i, j)] = 0
+            else:
+                time = random.randint(1, max_time)
+                DT[(i, j)] = time
+                DT[(j, i)] = time  # Make sure it's symmetric
     return DT
+
 
 
 # Sets and data (extended for 20 orders)
@@ -101,83 +107,83 @@ model.setObjective(DeliveryRevenue - (EarlinessTardinessCost + DisposalCost), GR
 
 # Constraints
 
-# Order assignment
+# Order assignment (9)
 model.addConstrs((quicksum(x[i,b] for b in B) == a[i] for i in I), name="AssignOrderToBatch")
 
-# Capacity
+# Capacity (10)
 model.addConstrs((quicksum(x[i,b]*W[i] for i in I) <= CA for b in B), name="Capacity")
 
-# Temperature feasibility
+# Temperature feasibility (11)
 # If order i is in batch b, then t_lb[i] <= t_b[b] <= t_ub[i]
 model.addConstrs((t_lb[i] - M*(1 - x[i,b]) <= t_b[b] for i in I for b in B), name="TempLower")
 model.addConstrs((t_b[b] <= t_ub[i] + M*(1 - x[i,b]) for i in I for b in B), name="TempUpper")
 
-# Batch to vehicle assignment
+# Batch to vehicle assignment (12 - 13)
 model.addConstrs((quicksum(y[b,v] for v in V) <= quicksum(x[i,b] for i in I) for b in B), name="NonemptyBatchIfAssigned")
 model.addConstrs((x[i,b] <= quicksum(y[b,v] for v in V) for i in I for b in B), name="LinkBatchVehicle")
 model.addConstrs((quicksum(y[b,v] for v in V) <= 1 for b in B), name="OneVehiclePerBatch")
 
-# Routing constraints
+# Routing constraints (14 - 15)
 # Flow balance for accepted orders
 model.addConstrs((r_b[0,i,b] + quicksum(r_b[j,i,b] for j in I if j!=i) == x[i,b] for b in B for i in I), name="RoutingInflow")
 model.addConstrs((r_b[i,0,b] + quicksum(r_b[i,j,b] for j in I if j!=i) == x[i,b] for b in B for i in I), name="RoutingOutflow")
 
-# Nonempty batch: route must start and end at depot
+# Nonempty batch: route must start and end at depot (16 - 17)
 model.addConstrs((quicksum(x[i,b] for i in I) <= M * quicksum(r_b[0,j,b] for j in I) for b in B), name="StartFromDepot")
 model.addConstrs((quicksum(x[i,b] for i in I) <= M * quicksum(r_b[j,0,b] for j in I) for b in B), name="ReturnToDepot")
 
-# No loops
+# No loops (18)
 model.addConstrs((r_b[i,i,b] == 0 for b in B for i in N), name="NoSelfLoop")
 
-# Subtour elimination in routing
+# Subtour elimination in routing (19 - 22)
 model.addConstrs((u_i[0,b] == 0 for b in B), name="DepotOrderPosition")
 model.addConstrs((u_i[i,b] + r_b[i,j,b] <= u_i[j,b] + M*(1 - r_b[i,j,b])
                   for b in B for i in N for j in I if i != j), name="RoutingSubtour1")
 model.addConstrs((u_i[i,b] <= M * quicksum(r_b[i,j,b] for j in I if j !=i) for b in B for i in I), name="RoutingSubtour2")
 model.addConstrs((u_i[i,b] <= quicksum(x[k,b] for k in I) for b in B for i in I), name="RoutingSubtour3")
 
-# Scheduling constraints (batches on vehicles)
+# Scheduling constraints (batches on vehicles) (23 - 24)
 # Flow balance in scheduling
 model.addConstrs((s[0,i,v] + quicksum(s[j,i,v] for j in B if j !=i) == y[i,v] for v in V for i in B), name="SchedInflow")
 model.addConstrs((s[i,0,v] + quicksum(s[i,j,v] for j in B if j !=i) == y[i,v] for v in V for i in B), name="SchedOutflow")
 
-# Nonempty vehicle schedule start/end
+# Nonempty vehicle schedule start/end (25 - 26)
 model.addConstrs((quicksum(y[i,v] for i in B) <= M * quicksum(s[0,j,v] for j in B) for v in V), name="SchedStart")
 model.addConstrs((quicksum(y[i,v] for i in B) <= M * quicksum(s[j,0,v] for j in B) for v in V), name="SchedEnd")
 
-# No self loops in scheduling
+# No self loops in scheduling (27)
 model.addConstrs((s[b,b,v] == 0 for b in B0 for v in V), name="NoSelfLoopScheduling")
 
-# Subtour elimination in scheduling
+# Subtour elimination in scheduling (28 - 31)
 model.addConstrs((u_bv[0, v] == 0 for v in V), name="SchedulingDepot")
 model.addConstrs((u_bv[i,v] + s[i,j,v] <= u_bv[j,v] + M*(1 - s[i,j,v]) for v in V for i in B for j in B if i != j), name="SchedulingSubtour1")
 model.addConstrs((u_bv[i,v] <= M * quicksum(s[i,j,v] for j in B if j != i) for v in V for i in B), name="SchedulingSubtour2")
 model.addConstrs((u_bv[i, v] <= quicksum(y[j, v] for j in B) for v in V for i in B), name="SchedulingSubtour3")
 
-# Batch timing constraints
+# Batch timing constraints (32 - 35)
 model.addConstrs((c_b_var[i] <= s_b_var[j] + M*(1 - s[i,j,v]) for v in V for i in B for j in B if i !=j), name="BatchTiming1")
 model.addConstrs((s_b_var[j] <= c_b_var[i] + M*(1 - s[i,j,v]) for v in V for i in B for j in B if i !=j), name="BatchTiming2")
 model.addConstrs((s_b_var[i] <= M * (1 - s[0,i,v]) for v in V for i in B), name="BatchStartFrom0")
 model.addConstrs((0 <= s_b_var[i] + M * (1 - s[0,i,v]) for v in V for i in B), name="BatchStartNonNeg")
 
-# Completion times of orders
+# Completion times of orders (36 - 37)
 # If i precedes j in batch b
 model.addConstrs((c[j] >= c[i] + DT[i,j] - M * (1 - r_b[i,j,b]) for b in B for i in I for j in I if i != j), name="OrderTimeForward")
 model.addConstrs((c[j] <= c[i] + DT[i,j] + M * (1 - r_b[i,j,b]) for b in B for i in I for j in I if i != j), name="OrderTimeBackward")
 
-# First visited order in batch
+# First visited order in batch (38 - 39)
 model.addConstrs((c[i] >= s_b_var[b] + DT[0,i] - M * (1 - r_b[0,i,b]) for b in B for i in I), name="FirstOrderTime1")
 model.addConstrs((c[i] <= s_b_var[b] + DT[0,i] + M * (1 - r_b[0,i,b]) for b in B for i in I), name="FirstOrderTime2")
 
-# Last visited order in batch
+# Last visited order in batch (40 - 41)
+model.addConstrs((c[i] >= c_b_var[b] - M * (1 - r_b[i,0,b]) - DT[i,0] for b in B for i in I), name="LastOrderTime2")
 model.addConstrs((c_b_var[b] >= c[i] + DT[i,0] - M * (1 - r_b[i,0,b]) for b in B for i in I), name="LastOrderTime1")
-model.addConstrs((c[i] <= c_b_var[b] + M * (1 - r_b[i,0,b]) - DT[i,0] for b in B for i in I), name="LastOrderTime2")
 
-# Earliness and Tardiness
+# Earliness and Tardiness (3 - 4)
 model.addConstrs((E[i] >= D[i] - c[i] - M * (1 - a[i]) for i in I), name="EarlinessDef")
 model.addConstrs((T[i] >= c[i] - D[i] - M * (1 - a[i]) for i in I), name="TardinessDef")
 
-# Disposal
+# Disposal (6)
 model.addConstrs((c[i] - S[i] <= M * z[i] for i in I), name="DisposalDef")
 
 # Link disposal to order rejection
