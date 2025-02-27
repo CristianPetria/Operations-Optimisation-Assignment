@@ -2,6 +2,7 @@ import unittest
 from gurobipy import Model, GRB, quicksum
 import sys
 import os
+import numpy as np
 
 # Go up two levels from tests folder to scripts folder
 scripts_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -755,5 +756,429 @@ class TestSubtourEliminationConstraints(unittest.TestCase):
         else:
             self.fail("Model did not solve to optimality")
 
+# Tests for earliness and tardiness constraints (32-35)
+class TestBatchTimingConstraints(unittest.TestCase):
+
+    def setUp(self):
+        self.model = Model("TestBatchTimingModel")
+
+        # Simplified test data
+        self.B = [1, 2]  # Batches
+        self.B0 = [0] + self.B  # Include depot
+        self.V = [1, 2]  # Vehicles
+        self.M = 1000  # Large constant
+
+        # Decision variables
+        self.s = self.model.addVars(self.B0, self.B0, self.V, vtype=GRB.BINARY, name="s")  # Scheduling of batches
+        self.s_b_var = self.model.addVars(self.B, vtype=GRB.CONTINUOUS, name="s_b")  # Start time of batch
+        self.c_b_var = self.model.addVars(self.B, vtype=GRB.CONTINUOUS, name="c_b")  # Completion time of batch
+
+        # Constraints (32-35)
+        self.model.addConstrs(
+            (self.c_b_var[i] <= self.s_b_var[j] + self.M * (1 - self.s[i, j, v])
+             for v in self.V for i in self.B for j in self.B if i != j),
+            name="BatchTiming1"
+        )
+        self.model.addConstrs(
+            (self.s_b_var[j] <= self.c_b_var[i] + self.M * (1 - self.s[i, j, v])
+             for v in self.V for i in self.B for j in self.B if i != j),
+            name="BatchTiming2"
+        )
+        self.model.addConstrs(
+            (self.s_b_var[i] <= self.M * (1 - self.s[0, i, v])
+             for v in self.V for i in self.B),
+            name="BatchStartFrom0"
+        )
+        self.model.addConstrs(
+            (0 <= self.s_b_var[i] + self.M * (1 - self.s[0, i, v])
+             for v in self.V for i in self.B),
+            name="BatchStartNonNeg"
+        )
+
+        # Objective function (to make model feasible)
+        self.model.setObjective(quicksum(self.s_b_var[i] + self.c_b_var[i] for i in self.B), GRB.MINIMIZE)
+
+        self.model.update()
+
+    def test_batch_timing1(self):
+        """Test that completion time of batch i is less than or equal to start time of batch j if scheduled after i."""
+        # Set some scheduling variables to 1 to simulate a sequence
+        self.s[1, 2, 1].lb = 1  # Batch 1 is scheduled before batch 2 on vehicle 1
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 32
+        self.assertLessEqual(self.c_b_var[1].X, self.s_b_var[2].X + self.M * (1 - self.s[1, 2, 1].X))
+
+    def test_batch_timing2(self):
+        """Test that start time of batch j is less than or equal to completion time of batch i if scheduled after i."""
+        # Set some scheduling variables to 1 to simulate a sequence
+        self.s[1, 2, 1].lb = 1  # Batch 1 is scheduled before batch 2 on vehicle 1
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 33
+        self.assertLessEqual(self.s_b_var[2].X, self.c_b_var[1].X + self.M * (1 - self.s[1, 2, 1].X))
+
+    def test_batch_start_from_0(self):
+        """Test that the start time of a batch is less than or equal to M if it is scheduled from the depot."""
+        # Set some scheduling variables to 1 to simulate starting from depot
+        self.s[0, 1, 1].lb = 1  # Batch 1 is scheduled to start from depot on vehicle 1
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 34
+        self.assertLessEqual(self.s_b_var[1].X, self.M * (1 - self.s[0, 1, 1].X))
+
+    def test_batch_start_non_negative(self):
+        """Test that the start time of a batch is non-negative if it is scheduled from the depot."""
+        # Set some scheduling variables to 1 to simulate starting from depot
+        self.s[0, 1, 1].lb = 1  # Batch 1 is scheduled to start from depot on vehicle 1
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 35
+        self.assertGreaterEqual(self.s_b_var[1].X, 0)
+
+# Tests for order completion time constraints (36-39)
+class TestOrderCompletionTimeConstraints(unittest.TestCase):
+
+    def setUp(self):
+        self.model = Model("TestOrderCompletionTimeModel")
+
+        # Simplified test data
+        self.I = [1, 2]  # Orders
+        self.B = [1]  # Batches
+        self.N = [0] + self.I  # Nodes: 0 = depot, others = orders
+        self.V = [1]  # Vehicles
+        self.M = 1000  # Large constant
+
+        # Travel time matrix (example)
+        self.DT = {
+            (0, 0): 0, (0, 1): 5, (0, 2): 10,
+            (1, 0): 5, (1, 1): 0, (1, 2): 7,
+            (2, 0): 10, (2, 1): 7, (2, 2): 0
+        }
+
+        # Decision variables
+        self.c = self.model.addVars(self.I, vtype=GRB.CONTINUOUS, name="c")  # Completion time of orders
+        self.r_b = self.model.addVars(self.N, self.N, self.B, vtype=GRB.BINARY, name="r_b")  # Routing within batch
+        self.s_b_var = self.model.addVars(self.B, vtype=GRB.CONTINUOUS, name="s_b")  # Start time of batch
+
+        # Constraints (36-39)
+        # Completion times of orders (36-37)
+        self.model.addConstrs(
+            (self.c[j] >= self.c[i] + self.DT[i, j] - self.M * (1 - self.r_b[i, j, b])
+             for b in self.B for i in self.I for j in self.I if i != j),
+            name="OrderTimeForward"
+        )
+        self.model.addConstrs(
+            (self.c[j] <= self.c[i] + self.DT[i, j] + self.M * (1 - self.r_b[i, j, b])
+             for b in self.B for i in self.I for j in self.I if i != j),
+            name="OrderTimeBackward"
+        )
+
+        # First visited order in batch (38-39)
+        self.model.addConstrs(
+            (self.c[i] >= self.s_b_var[b] + self.DT[0, i] - self.M * (1 - self.r_b[0, i, b])
+             for b in self.B for i in self.I),
+            name="FirstOrderTime1"
+        )
+        self.model.addConstrs(
+            (self.c[i] <= self.s_b_var[b] + self.DT[0, i] + self.M * (1 - self.r_b[0, i, b])
+             for b in self.B for i in self.I),
+            name="FirstOrderTime2"
+        )
+
+        # Objective function (to make model feasible)
+        self.model.setObjective(quicksum(self.c[i] for i in self.I), GRB.MINIMIZE)
+
+        self.model.update()
+
+    def test_order_time_forward(self):
+        """Test that the completion time of order j is at least the completion time of order i plus travel time if i precedes j."""
+        # Simulate order 1 preceding order 2 in batch 1
+        self.r_b[1, 2, 1].lb = 1  # Order 1 precedes order 2 in batch 1
+        self.c[1].lb = 10  # Set completion time of order 1 to 10
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 36
+        self.assertGreaterEqual(self.c[2].X, self.c[1].X + self.DT[1, 2] - self.M * (1 - self.r_b[1, 2, 1].X))
+
+    def test_order_time_backward(self):
+        """Test that the completion time of order j is at most the completion time of order i plus travel time if i precedes j."""
+        # Simulate order 1 preceding order 2 in batch 1
+        self.r_b[1, 2, 1].lb = 1  # Order 1 precedes order 2 in batch 1
+        self.c[1].lb = 10  # Set completion time of order 1 to 10
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 37
+        self.assertLessEqual(self.c[2].X, self.c[1].X + self.DT[1, 2] + self.M * (1 - self.r_b[1, 2, 1].X))
+
+    def test_first_order_time1(self):
+        """Test that the completion time of the first order in a batch is at least the start time of the batch plus travel time from the depot."""
+        # Simulate order 1 being the first order in batch 1
+        self.r_b[0, 1, 1].lb = 1  # Order 1 is the first order in batch 1
+        self.s_b_var[1].lb = 5  # Set start time of batch 1 to 5
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 38
+        self.assertGreaterEqual(self.c[1].X, self.s_b_var[1].X + self.DT[0, 1] - self.M * (1 - self.r_b[0, 1, 1].X))
+
+    def test_first_order_time2(self):
+        """Test that the completion time of the first order in a batch is at most the start time of the batch plus travel time from the depot."""
+        # Simulate order 1 being the first order in batch 1
+        self.r_b[0, 1, 1].lb = 1  # Order 1 is the first order in batch 1
+        self.s_b_var[1].lb = 5  # Set start time of batch 1 to 5
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 39
+        self.assertLessEqual(self.c[1].X, self.s_b_var[1].X + self.DT[0, 1] + self.M * (1 - self.r_b[0, 1, 1].X))
+
+# Tests for last order in batch and earliness/tardiness constraints (40-41 and 3-4)
+class TestLastOrderAndEarlinessTardinessConstraints(unittest.TestCase):
+
+    def setUp(self):
+        self.model = Model("TestLastOrderAndEarlinessTardinessModel")
+
+        # Simplified test data
+        self.I = [1, 2]  # Orders
+        self.B = [1]  # Batches
+        self.N = [0] + self.I  # Nodes: 0 = depot, others = orders
+        self.V = [1]  # Vehicles
+        self.M = 1000  # Large constant
+
+        # Travel time matrix (example)
+        self.DT = {
+            (0, 0): 0, (0, 1): 5, (0, 2): 10,
+            (1, 0): 5, (1, 1): 0, (1, 2): 7,
+            (2, 0): 10, (2, 1): 7, (2, 2): 0
+        }
+
+        # Due dates (example)
+        self.D = {1: 15, 2: 20}  # Due dates for orders
+
+        # Decision variables
+        self.c = self.model.addVars(self.I, vtype=GRB.CONTINUOUS, name="c")  # Completion time of orders
+        self.c_b_var = self.model.addVars(self.B, vtype=GRB.CONTINUOUS, name="c_b")  # Completion time of batches
+        self.r_b = self.model.addVars(self.N, self.N, self.B, vtype=GRB.BINARY, name="r_b")  # Routing within batch
+        self.a = self.model.addVars(self.I, vtype=GRB.BINARY, name="a")  # Order acceptance
+        self.E = self.model.addVars(self.I, vtype=GRB.CONTINUOUS, name="E")  # Earliness
+        self.T = self.model.addVars(self.I, vtype=GRB.CONTINUOUS, name="T")  # Tardiness
+
+        # Constraints (40-41): Last visited order in batch
+        self.model.addConstrs(
+            (self.c[i] >= self.c_b_var[b] - self.M * (1 - self.r_b[i, 0, b]) - self.DT[i, 0]
+             for b in self.B for i in self.I),
+            name="LastOrderTime2"
+        )
+        self.model.addConstrs(
+            (self.c_b_var[b] >= self.c[i] + self.DT[i, 0] - self.M * (1 - self.r_b[i, 0, b])
+             for b in self.B for i in self.I),
+            name="LastOrderTime1"
+        )
+
+        # Constraints (3-4): Earliness and Tardiness
+        self.model.addConstrs(
+            (self.E[i] >= self.D[i] - self.c[i] - self.M * (1 - self.a[i])
+             for i in self.I),
+            name="EarlinessDef"
+        )
+        self.model.addConstrs(
+            (self.T[i] >= self.c[i] - self.D[i] - self.M * (1 - self.a[i])
+             for i in self.I),
+            name="TardinessDef"
+        )
+
+        # Objective function (to make model feasible)
+        self.model.setObjective(quicksum(self.c[i] for i in self.I), GRB.MINIMIZE)
+
+        self.model.update()
+
+    def test_last_order_time1(self):
+        """Test that the completion time of a batch is at least the completion time of the last order plus travel time to the depot."""
+        # Simulate order 1 being the last order in batch 1
+        self.r_b[1, 0, 1].lb = 1  # Order 1 is the last order in batch 1
+        self.c[1].lb = 10  # Set completion time of order 1 to 10
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 40
+        self.assertGreaterEqual(self.c_b_var[1].X, self.c[1].X + self.DT[1, 0] - self.M * (1 - self.r_b[1, 0, 1].X))
+
+    def test_last_order_time2(self):
+        """Test that the completion time of the last order is at least the completion time of the batch minus travel time to the depot."""
+        # Simulate order 1 being the last order in batch 1
+        self.r_b[1, 0, 1].lb = 1  # Order 1 is the last order in batch 1
+        self.c_b_var[1].lb = 15  # Set completion time of batch 1 to 15
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 41
+        self.assertGreaterEqual(self.c[1].X, self.c_b_var[1].X - self.M * (1 - self.r_b[1, 0, 1].X) - self.DT[1, 0])
+
+    def test_earliness_def(self):
+        """Test that earliness is correctly calculated as the difference between due date and completion time."""
+        # Simulate order 1 being accepted and completed before its due date
+        self.a[1].lb = 1  # Order 1 is accepted
+        self.c[1].lb = 10  # Set completion time of order 1 to 10
+        self.D[1] = 15  # Due date for order 1 is 15
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 3
+        self.assertGreaterEqual(self.E[1].X, self.D[1] - self.c[1].X - self.M * (1 - self.a[1].X))
+
+    def test_tardiness_def(self):
+        """Test that tardiness is correctly calculated as the difference between completion time and due date."""
+        # Simulate order 1 being accepted and completed after its due date
+        self.a[1].lb = 1  # Order 1 is accepted
+        self.c[1].lb = 20  # Set completion time of order 1 to 20
+        self.D[1] = 15  # Due date for order 1 is 15
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 4
+        self.assertGreaterEqual(self.T[1].X, self.c[1].X - self.D[1] - self.M * (1 - self.a[1].X))
+
+# Tests for order acceptance constraints (6) and link to disposal
+class TestDisposalConstraints(unittest.TestCase):
+
+    def setUp(self):
+        self.model = Model("TestDisposalModel")
+
+        # Simplified test data
+        self.I = [1, 2]  # Orders
+        self.M = 1000  # Large constant
+
+        # Shelf life (example)
+        self.S = {1: 10, 2: 15}  # Shelf lives for orders
+
+        # Decision variables
+        self.c = self.model.addVars(self.I, vtype=GRB.CONTINUOUS, name="c")  # Completion time of orders
+        self.z = self.model.addVars(self.I, vtype=GRB.BINARY, name="z")  # Disposal indicator
+        self.a = self.model.addVars(self.I, vtype=GRB.BINARY, name="a")  # Order acceptance
+
+        # Constraints (6): Disposal
+        self.model.addConstrs(
+            (self.c[i] - self.S[i] <= self.M * self.z[i] for i in self.I),
+            name="DisposalDef"
+        )
+
+        # Link disposal to order rejection
+        self.model.addConstrs(
+            (self.z[i] >= 1 - self.a[i] for i in self.I),
+            name="LinkDisposalLower"
+        )
+        self.model.addConstrs(
+            (self.z[i] <= 1 - self.a[i] for i in self.I),
+            name="LinkDisposalUpper"
+        )
+
+        # Objective function (to make model feasible)
+        self.model.setObjective(quicksum(self.c[i] for i in self.I), GRB.MINIMIZE)
+
+        self.model.update()
+
+    def test_disposal_def(self):
+        """Test that an order is disposed of if its completion time exceeds its shelf life."""
+        # Simulate order 1 being completed after its shelf life
+        self.c[1].lb = 12  # Completion time of order 1 is 12
+        self.S[1] = 10  # Shelf life of order 1 is 10
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint 6
+        self.assertLessEqual(self.c[1].X - self.S[1], self.M * self.z[1].X)
+
+    def test_link_disposal_lower(self):
+        """Test that if an order is rejected, it must be disposed of."""
+        # Simulate order 1 being rejected
+        self.a[1].lb = 0  # Order 1 is rejected
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint LinkDisposalLower
+        self.assertGreaterEqual(self.z[1].X, 1 - self.a[1].X)
+
+    def test_link_disposal_upper(self):
+        """Test that if an order is accepted, it cannot be disposed of."""
+        # Simulate order 1 being accepted
+        self.a[1].lb = 1  # Order 1 is accepted
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check constraint LinkDisposalUpper
+        self.assertLessEqual(self.z[1].X, 1 - self.a[1].X)
+
+    def test_disposal_and_acceptance(self):
+        """Test the interaction between disposal and order acceptance."""
+        # Simulate order 1 being accepted and completed within its shelf life
+        self.a[1].lb = 1  # Order 1 is accepted
+        self.c[1].lb = 8  # Completion time of order 1 is 8
+        self.S[1] = 10  # Shelf life of order 1 is 10
+
+        # Simulate order 2 being rejected
+        self.a[2].lb = 0  # Order 2 is rejected
+
+        self.model.optimize()
+
+        # Check if model is feasible
+        self.assertNotEqual(self.model.Status, GRB.INFEASIBLE)
+
+        # Check that order 1 is not disposed of
+        self.assertEqual(self.z[1].X, 0, "Order 1 should not be disposed of because it is accepted and completed within its shelf life.")
+
+
 if __name__ == "__main__":
     unittest.main()
+
